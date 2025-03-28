@@ -1,0 +1,143 @@
+import boto3
+from botocore.exceptions import ClientError
+import json
+from datetime import datetime
+
+
+def get_table_data(glue_client, database_name, table_name):
+    """
+    Retrieves table data (including column details) from the AWS Glue Data Catalog.
+
+    Args:
+        glue_client: The AWS Glue client.
+        database_name (str): The name of the Glue database.
+        table_name (str): The name of the Glue table.
+
+    Returns:
+        dict: A dictionary containing the table data, or None if an error occurs.
+    """
+    try:
+        response = glue_client.get_table(DatabaseName=database_name, Name=table_name)
+        return response["Table"]
+    except ClientError as e:
+        print(
+            f"Error getting table '{table_name}' from database '{database_name}': {e}"
+        )
+        return None
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        return None
+
+
+def update_column_description(
+    glue_client, database_name, table_name, column_name, new_description
+):
+    """
+    Updates the description of a specific column in an AWS Glue table.
+
+    Args:
+        glue_client: The AWS Glue client.
+        database_name (str): The name of the Glue database.
+        table_name (str): The name of the Glue table.
+        column_name (str): The name of the column to update.
+        new_description (str): The new description for the column.
+    """
+    try:
+        # Get the existing table definition
+        table_data = get_table_data(glue_client, database_name, table_name)
+        if table_data is None:
+            return
+
+        # Prepare the TableInput structure for update_table
+        table_input = {
+            "Name": table_data["Name"],
+            "Description": table_data.get("Description", ""),
+            "Owner": table_data.get("Owner", "unknown"),  # Default to "unknown"
+            "LastAccessTime": table_data.get("LastAccessTime", datetime(1970, 1, 1)),
+            "LastAnalyzedTime": table_data.get(
+                "LastAnalyzedTime", datetime(1970, 1, 1)
+            ),
+            "Retention": table_data.get("Retention"),
+            "StorageDescriptor": table_data["StorageDescriptor"],
+            "PartitionKeys": table_data.get("PartitionKeys", []),
+            "ViewOriginalText": table_data.get("ViewOriginalText", ""),
+            "ViewExpandedText": table_data.get("ViewExpandedText", ""),
+            "TableType": table_data.get("TableType"),
+            "Parameters": table_data.get("Parameters", {}),
+        }
+
+        if "TargetTable" in table_data:
+            table_input["TargetTable"] = table_data["TargetTable"]
+
+        if "ViewDefinition" in table_data:
+            table_input["ViewDefinition"] = table_data["ViewDefinition"]
+
+        # Find the column and update its description
+        column_found = False
+        for column in table_input["StorageDescriptor"]["Columns"]:
+            if column["Name"] == column_name:
+                column["Comment"] = new_description
+                column_found = True
+                break
+
+        if not column_found:
+            print(f"Column '{column_name}' not found in table '{table_name}'.")
+            return
+
+        # Update the table in Glue
+        glue_client.update_table(DatabaseName=database_name, TableInput=table_input)
+        print(
+            f"Successfully updated description for column '{column_name}' in table '{table_name}'."
+        )
+
+    except ClientError as e:
+        print(f"Error updating column '{column_name}' in table '{table_name}': {e}")
+        print(e)
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        print(e)
+
+
+def main():
+    """
+    Main function to demonstrate pulling table data and updating a column description.
+    """
+    # Replace with your actual values
+    database_name = "your_db"
+    table_name = "your_table_name"
+    column_name_to_update = "column_to_update"
+    new_column_description = "Testing"
+    role_arn_to_assume = "YOUR_ROLE_ARN"
+
+    # Create an STS client
+    sts_client = boto3.client("sts")
+
+    # Assume the role
+    assumed_role_object = sts_client.assume_role(
+        RoleArn=role_arn_to_assume, RoleSessionName="GlueSession"
+    )
+
+    # Extract credentials from the assumed role object
+    credentials = assumed_role_object["Credentials"]
+
+    # Create a Glue client using the assumed role's credentials
+    glue_client = boto3.client(
+        "glue",
+        aws_access_key_id=credentials["AccessKeyId"],
+        aws_secret_access_key=credentials["SecretAccessKey"],
+        aws_session_token=credentials["SessionToken"],
+        region_name="eu-west-2",
+    )
+
+    # Update the column description
+    update_column_description(
+        glue_client,
+        database_name,
+        table_name,
+        column_name_to_update,
+        new_column_description,
+    )
+
+
+if __name__ == "__main__":
+    main()
